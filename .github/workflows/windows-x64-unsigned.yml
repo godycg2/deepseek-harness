@@ -1,0 +1,59 @@
+name: Build Windows x64 Installer (unsigned)
+
+# 手动触发：在 Actions 页面选择本工作流，点击 Run workflow
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一时间只允许一个构建，新的请求排队而不是取消正在进行的构建
+concurrency:
+  group: windows-x64-unsigned
+  cancel-in-progress: false
+
+jobs:
+  package:
+    # GitHub 托管的 Windows x64 runner
+    # 自带 Visual Studio C++ Build Tools、Windows SDK、Python、Git、PowerShell 7，无需额外安装
+    runs-on: windows-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        # pnpm 版本自动从 package.json 的 "packageManager": "pnpm@11.28.5" 读取，无需手动指定
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Show toolchain versions
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned Windows x64 installer
+        run: pnpm run package:desktop:win:x64:unsigned
+
+      - name: List build output
+        run: Get-ChildItem "apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: deepseek-harness-win-x64-unsigned
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*
+          retention-days: 14
+          if-no-files-found: error
