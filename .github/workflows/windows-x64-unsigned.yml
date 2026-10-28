@@ -44,6 +44,18 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Create .env.windows for unsigned build
+        # Windows 未签名构建仍需读取 .env.windows（与 macOS 不同），
+        # 仅需 app ID 和强制更新策略源（只做格式校验，不实际访问），无需签名/下载凭据
+        run: |
+          $lines = @(
+            'DSH_DESKTOP_APP_ID=com.deepseek.dsh',
+            'DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://example.com',
+            'DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://example.com"]}'
+          )
+          $lines | Out-File -FilePath "apps/desktop/.env.windows" -Encoding utf8
+          Get-Content "apps/desktop/.env.windows"
+
       - name: Build unsigned Windows x64 installer
         run: pnpm run package:desktop:win:x64:unsigned
 
