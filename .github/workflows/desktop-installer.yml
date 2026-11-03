@@ -168,14 +168,26 @@ jobs:
         run: |
           DIR="apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts"
           test -d "$DIR"
+          # 只取最终安装包（文件名以 deepseek-harness- 开头），忽略 electron-builder
+          # 的 win-unpacked/、.nsis-directory-installer/ 等中间目录里的内部 exe。
+          shopt -s nullglob
+          EXT="${{ matrix.target == 'win-x64' && 'exe' || 'dmg' }}"
+          MATCHES=("$DIR"/deepseek-harness-*."$EXT")
+          if [[ ${#MATCHES[@]} -ne 1 ]]; then
+            echo "错误：期望恰好 1 个 $EXT 安装包，实际找到 ${#MATCHES[@]} 个" >&2
+            ls -la "$DIR" >&2
+            exit 1
+          fi
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          echo "file=${MATCHES[0]}" >> "$GITHUB_OUTPUT"
+          echo "选中安装包：${MATCHES[0]}"
           ls -la "$DIR"
 
       - name: 上传安装包产物
         uses: actions/upload-artifact@v7.0.1
         with:
           name: installer-${{ matrix.target }}-${{ env.RELEASE_VERSION }}
-          path: ${{ steps.installer.outputs.dir }}/
+          path: ${{ steps.installer.outputs.file }}
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -237,7 +249,8 @@ jobs:
             NOTES="根据 ${{ inputs.source_ref }}（${SHORT_SHA}）构建的未签名桌面安装包。"
             EXTRA+=(--prerelease --target "$GITHUB_SHA")
           fi
-          FILES=(artifacts/**/*.exe artifacts/**/*.dmg)
+          # 只上传最终安装包（deepseek-harness- 开头），排除内部 exe，避免同名资产冲突。
+          FILES=(artifacts/**/deepseek-harness-*.exe artifacts/**/deepseek-harness-*.dmg)
           if [[ ${#FILES[@]} -eq 0 ]]; then
             echo "错误：在 artifacts/ 目录下没有找到任何安装包文件" >&2
             exit 1
