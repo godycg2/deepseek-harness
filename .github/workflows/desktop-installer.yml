@@ -49,6 +49,11 @@ jobs:
     name: 构建 ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
+    env:
+      # GitHub Windows 托管 runner 上的 GNU tar 会把带盘符冒号的绝对路径（D:\...）
+      # 误判为“主机:文件”远程语法，导致 Cannot connect to D: 报错。
+      # --force-local 强制按本地文件处理；macOS/System32 的 bsdtar 不读取该变量，自动忽略。
+      TAR_OPTIONS: --force-local
     defaults:
       run:
         shell: bash
