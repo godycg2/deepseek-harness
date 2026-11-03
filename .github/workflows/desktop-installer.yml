@@ -1,15 +1,15 @@
-# Build unsigned desktop installers for Windows x64 and macOS Intel (x64).
+# 构建 Windows x64 与 macOS Intel（x64）的未签名桌面安装包。
 #
-# Trigger 1 (tag release): push a tag like `v1.2.3` or `dsh-v1.2.3`.
-#   The tag version is written into the manifests, so every artifact name contains
-#   the tag version, and a GitHub Release is created with both installers attached.
+# 触发方式一（推送标签发布）：推送形如 `v1.2.3` 或 `dsh-v1.2.3` 的标签。
+#   标签中的版本号会被写入版本清单，因此所有产物文件名都包含该标签版本，
+#   同时会自动创建一个 GitHub Release，并把两个安装包作为附件上传。
 #
-# Trigger 2 (manual): run this workflow manually from the Actions tab. Set
-#   source_ref to a branch/tag and version_mode to `source` (package.json
-#   version) or `tag` (version parsed from the source_ref tag).
-name: Desktop Installers
+# 触发方式二（手动运行）：在 Actions 页面手动运行本工作流。
+#   source_ref 填写要构建的分支或标签；version_mode 选择 `source`
+#   （使用 package.json 中的版本）或 `tag`（从 source_ref 标签解析版本）。
+name: 桌面端安装包
 
-run-name: Desktop Installers · ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+run-name: 桌面端安装包 · ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
 
 on:
   push:
@@ -19,12 +19,12 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: 'Source branch or tag to build (latest source)'
+        description: '要构建的源码分支或标签（即从哪里取最新源码），默认 master'
         type: string
         default: master
         required: true
       version_mode:
-        description: 'Version in artifact names: source = package.json version; tag = version parsed from the source_ref tag'
+        description: '产物文件名使用的版本：source=使用 package.json 版本；tag=从 source_ref 标签中解析版本（此时 source_ref 必须是已存在的标签）'
         type: choice
         options:
           - source
@@ -32,7 +32,7 @@ on:
         default: source
         required: true
       publish_release:
-        description: 'Also publish a prerelease GitHub Release from this build'
+        description: '是否同时把本次构建发布为一个 GitHub Release（预发布版本）；不勾选则只生成 Actions 产物'
         type: boolean
         default: false
         required: true
@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: 构建 ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     defaults:
@@ -63,28 +63,28 @@ jobs:
             runner: macos-26-intel
             package_script: package:desktop:mac:x64:unsigned
     steps:
-      - name: Checkout source
+      - name: 检出源码
         uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
 
-      - name: Setup pnpm
+      - name: 安装 pnpm
         uses: pnpm/action-setup@v5.0.0
 
-      - name: Setup Node.js
+      - name: 安装 Node.js
         uses: actions/setup-node@v7.0.0
         with:
           node-version: '24'
           cache: pnpm
 
-      - name: Show toolchain
+      - name: 查看工具链
         run: |
-          echo "runner=$(uname -a)"
-          echo "node arch=$(node -p process.arch)"
+          echo "运行环境=$(uname -a)"
+          echo "Node 架构=$(node -p process.arch)"
           node --version
           pnpm --version
 
-      - name: Resolve release tag and version
+      - name: 解析发布标签与版本号
         run: |
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             RELEASE_TAG="$GITHUB_REF_NAME"
@@ -97,7 +97,7 @@ jobs:
           elif [[ "${{ inputs.version_mode }}" == "tag" ]]; then
             RAW="${{ inputs.source_ref }}"
             if ! git rev-parse --verify --quiet "refs/tags/$RAW" >/dev/null; then
-              echo "version_mode=tag requires source_ref to be an existing tag: $RAW" >&2
+              echo "错误：version_mode 选择 tag 时，source_ref 必须是仓库中已存在的标签：$RAW" >&2
               exit 1
             fi
             RELEASE_TAG="$RAW"
@@ -115,11 +115,11 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
           echo "USE_TAG_VERSION=$USE_TAG_VERSION" >> "$GITHUB_ENV"
-          echo "target=${{ matrix.target }} tag=$RELEASE_TAG version=$RELEASE_VERSION"
+          echo "目标=${{ matrix.target }} 标签=$RELEASE_TAG 版本=$RELEASE_VERSION"
 
-      # Windows unsigned packaging still reads apps/desktop/.env.windows.
-      # Placeholder origins only satisfy local validation; they are never contacted.
-      - name: Create Windows packaging env
+      # Windows 未签名打包仍会读取 apps/desktop/.env.windows。
+      # 这里的占位 origin 仅用于通过本地校验，运行时不会真正访问这些地址。
+      - name: 生成 Windows 打包环境配置
         if: matrix.target == 'win-x64'
         run: |
           cat > apps/desktop/.env.windows <<'EOF'
@@ -130,12 +130,12 @@ jobs:
           DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3
           EOF
 
-      - name: Install dependencies
+      - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      # Make the tag version authoritative so artifact names contain the tag version.
-      # Runs after install so the frozen lockfile is never re-resolved.
-      - name: Apply tag version to manifests
+      # 让标签版本成为权威版本，使产物文件名包含标签版本。
+      # 放在依赖安装之后执行，避免冻结的 lockfile 被重新解析。
+      - name: 将标签版本写入版本清单
         if: env.USE_TAG_VERSION == 'true'
         run: |
           node -e '
@@ -143,7 +143,7 @@ jobs:
             const semver = require("semver");
             const v = process.env.RELEASE_VERSION;
             if (!semver.valid(v)) {
-              console.error("Tag does not resolve to a valid semver version: " + v);
+              console.error("标签无法解析为合法的 semver 版本号：" + v);
               process.exit(1);
             }
             for (const p of ["package.json", "apps/desktop/package.json"]) {
@@ -151,13 +151,13 @@ jobs:
               json.version = v;
               fs.writeFileSync(p, JSON.stringify(json, null, 2) + "\n");
             }
-            console.log("Applied version " + v);
+            console.log("已写入版本号 " + v);
           '
 
-      - name: Package installer
+      - name: 打包安装程序
         run: pnpm run ${{ matrix.package_script }}
 
-      - name: Locate installer
+      - name: 定位安装包
         id: installer
         run: |
           DIR="apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts"
@@ -165,7 +165,7 @@ jobs:
           echo "dir=$DIR" >> "$GITHUB_OUTPUT"
           ls -la "$DIR"
 
-      - name: Upload installer artifact
+      - name: 上传安装包产物
         uses: actions/upload-artifact@v7.0.1
         with:
           name: installer-${{ matrix.target }}-${{ env.RELEASE_VERSION }}
@@ -175,7 +175,7 @@ jobs:
           retention-days: 30
 
   publish-release:
-    name: Publish GitHub Release
+    name: 发布 GitHub Release
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -183,12 +183,12 @@ jobs:
       contents: write
     if: startsWith(github.ref, 'refs/tags/') || inputs.publish_release == true
     steps:
-      - name: Download all installers
+      - name: 下载全部安装包
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
-      - name: Create release and upload assets
+      - name: 创建 Release 并上传附件
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -202,8 +202,8 @@ jobs:
               *)      VERSION="$TAG" ;;
             esac
             TITLE="DeepSeek Harness $TAG"
-            NOTES="Unsigned desktop installers built from tag $TAG."
-            # Pre-release versions (e.g. 0.2.2-alpha.2) are marked as prerelease.
+            NOTES="根据标签 $TAG 构建的未签名桌面安装包。"
+            # 预发布版本（如 0.2.2-alpha.2）自动标记为 prerelease。
             if [[ "$VERSION" == *-* ]]; then EXTRA+=(--prerelease); fi
           elif [[ "${{ inputs.version_mode }}" == "tag" ]]; then
             TAG="${{ inputs.source_ref }}"
@@ -213,26 +213,26 @@ jobs:
               *)      VERSION="$TAG" ;;
             esac
             TITLE="DeepSeek Harness $TAG"
-            NOTES="Unsigned desktop installers built manually from tag $TAG."
+            NOTES="手动根据标签 $TAG 构建的未签名桌面安装包。"
             if [[ "$VERSION" == *-* ]]; then EXTRA+=(--prerelease); fi
           else
             SHORT_SHA="${GITHUB_SHA:0:7}"
             STAMP="$(date -u +%Y%m%d)"
             TAG="ci-${SHORT_SHA}-${STAMP}"
-            TITLE="DeepSeek Harness nightly $TAG"
-            NOTES="Unsigned desktop installers built from ${{ inputs.source_ref }} (${SHORT_SHA})."
+            TITLE="DeepSeek Harness 夜间构建 $TAG"
+            NOTES="根据 ${{ inputs.source_ref }}（${SHORT_SHA}）构建的未签名桌面安装包。"
             EXTRA+=(--prerelease --target "$GITHUB_SHA")
           fi
           FILES=(artifacts/**/*.exe artifacts/**/*.dmg)
           if [[ ${#FILES[@]} -eq 0 ]]; then
-            echo "No installer files found under artifacts/" >&2
+            echo "错误：在 artifacts/ 目录下没有找到任何安装包文件" >&2
             exit 1
           fi
-          # Tolerate re-runs: upload to an existing Release instead of failing.
+          # 兼容重复运行：若 Release 已存在则直接上传，而不是报错失败。
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${FILES[@]}" --clobber
           else
             gh release create "$TAG" "${FILES[@]}" \
               --title "$TITLE" --notes "$NOTES" "${EXTRA[@]}"
           fi
-          echo "Published release $TAG"
+          echo "已发布 Release：$TAG"
