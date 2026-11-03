@@ -4,8 +4,9 @@
 #   The tag version is written into the manifests, so every artifact name contains
 #   the tag version, and a GitHub Release is created with both installers attached.
 #
-# Trigger 2 (latest source): run this workflow manually from the Actions tab and
-#   pick a branch/tag (defaults to master). Artifacts use the package.json version.
+# Trigger 2 (manual): run this workflow manually from the Actions tab. Set
+#   source_ref to a branch/tag and version_mode to `source` (package.json
+#   version) or `tag` (version parsed from the source_ref tag).
 name: Desktop Installers
 
 run-name: Desktop Installers · ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
@@ -21,6 +22,14 @@ on:
         description: 'Source branch or tag to build (latest source)'
         type: string
         default: master
+        required: true
+      version_mode:
+        description: 'Version in artifact names: source = package.json version; tag = version parsed from the source_ref tag'
+        type: choice
+        options:
+          - source
+          - tag
+        default: source
         required: true
       publish_release:
         description: 'Also publish a prerelease GitHub Release from this build'
@@ -84,12 +93,28 @@ jobs:
               v*)     RELEASE_VERSION="${RELEASE_TAG#v}" ;;
               *)      RELEASE_VERSION="$RELEASE_TAG" ;;
             esac
+            USE_TAG_VERSION=true
+          elif [[ "${{ inputs.version_mode }}" == "tag" ]]; then
+            RAW="${{ inputs.source_ref }}"
+            if ! git rev-parse --verify --quiet "refs/tags/$RAW" >/dev/null; then
+              echo "version_mode=tag requires source_ref to be an existing tag: $RAW" >&2
+              exit 1
+            fi
+            RELEASE_TAG="$RAW"
+            case "$RAW" in
+              dsh-v*) RELEASE_VERSION="${RAW#dsh-v}" ;;
+              v*)     RELEASE_VERSION="${RAW#v}" ;;
+              *)      RELEASE_VERSION="$RAW" ;;
+            esac
+            USE_TAG_VERSION=true
           else
             RELEASE_TAG=""
             RELEASE_VERSION="$(node -p "require('./package.json').version")"
+            USE_TAG_VERSION=false
           fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "USE_TAG_VERSION=$USE_TAG_VERSION" >> "$GITHUB_ENV"
           echo "target=${{ matrix.target }} tag=$RELEASE_TAG version=$RELEASE_VERSION"
 
       # Windows unsigned packaging still reads apps/desktop/.env.windows.
@@ -111,7 +136,7 @@ jobs:
       # Make the tag version authoritative so artifact names contain the tag version.
       # Runs after install so the frozen lockfile is never re-resolved.
       - name: Apply tag version to manifests
-        if: github.event_name == 'push'
+        if: env.USE_TAG_VERSION == 'true'
         run: |
           node -e '
             const fs = require("node:fs");
@@ -180,6 +205,16 @@ jobs:
             NOTES="Unsigned desktop installers built from tag $TAG."
             # Pre-release versions (e.g. 0.2.2-alpha.2) are marked as prerelease.
             if [[ "$VERSION" == *-* ]]; then EXTRA+=(--prerelease); fi
+          elif [[ "${{ inputs.version_mode }}" == "tag" ]]; then
+            TAG="${{ inputs.source_ref }}"
+            case "$TAG" in
+              dsh-v*) VERSION="${TAG#dsh-v}" ;;
+              v*)     VERSION="${TAG#v}" ;;
+              *)      VERSION="$TAG" ;;
+            esac
+            TITLE="DeepSeek Harness $TAG"
+            NOTES="Unsigned desktop installers built manually from tag $TAG."
+            if [[ "$VERSION" == *-* ]]; then EXTRA+=(--prerelease); fi
           else
             SHORT_SHA="${GITHUB_SHA:0:7}"
             STAMP="$(date -u +%Y%m%d)"
@@ -193,6 +228,11 @@ jobs:
             echo "No installer files found under artifacts/" >&2
             exit 1
           fi
-          gh release create "$TAG" "${FILES[@]}" \
-            --title "$TITLE" --notes "$NOTES" "${EXTRA[@]}"
+          # Tolerate re-runs: upload to an existing Release instead of failing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          else
+            gh release create "$TAG" "${FILES[@]}" \
+              --title "$TITLE" --notes "$NOTES" "${EXTRA[@]}"
+          fi
           echo "Published release $TAG"
