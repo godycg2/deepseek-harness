@@ -124,6 +124,8 @@ jobs:
 
       # Windows 未签名打包仍会读取 apps/desktop/.env.windows。
       # 这里的占位 origin 仅用于通过本地校验，运行时不会真正访问这些地址。
+      # 只写入各版本都支持的共享键：平台专属键（如压缩级别）在旧标签版本中
+      # 尚未支持，写入会触发 unsupported setting 报错，故此处一律不写。
       - name: 生成 Windows 打包环境配置
         if: matrix.target == 'win-x64'
         run: |
@@ -132,7 +134,6 @@ jobs:
           DSH_DESKTOP_AUTO_UPDATE_ENV=test
           DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://example.com
           DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://example.com"]}
-          DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3
           EOF
 
       - name: 安装依赖
