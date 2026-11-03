@@ -1,0 +1,198 @@
+# Build unsigned desktop installers for Windows x64 and macOS Intel (x64).
+#
+# Trigger 1 (tag release): push a tag like `v1.2.3` or `dsh-v1.2.3`.
+#   The tag version is written into the manifests, so every artifact name contains
+#   the tag version, and a GitHub Release is created with both installers attached.
+#
+# Trigger 2 (latest source): run this workflow manually from the Actions tab and
+#   pick a branch/tag (defaults to master). Artifacts use the package.json version.
+name: Desktop Installers
+
+run-name: Desktop Installers · ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'dsh-v*'
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Source branch or tag to build (latest source)'
+        type: string
+        default: master
+        required: true
+      publish_release:
+        description: 'Also publish a prerelease GitHub Release from this build'
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-installers-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win-x64
+            runner: windows-latest
+            package_script: package:desktop:win:x64:unsigned
+          - target: mac-x64
+            runner: macos-26-intel
+            package_script: package:desktop:mac:x64:unsigned
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Show toolchain
+        run: |
+          echo "runner=$(uname -a)"
+          echo "node arch=$(node -p process.arch)"
+          node --version
+          pnpm --version
+
+      - name: Resolve release tag and version
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+            case "$RELEASE_TAG" in
+              dsh-v*) RELEASE_VERSION="${RELEASE_TAG#dsh-v}" ;;
+              v*)     RELEASE_VERSION="${RELEASE_TAG#v}" ;;
+              *)      RELEASE_VERSION="$RELEASE_TAG" ;;
+            esac
+          else
+            RELEASE_TAG=""
+            RELEASE_VERSION="$(node -p "require('./package.json').version")"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+          echo "target=${{ matrix.target }} tag=$RELEASE_TAG version=$RELEASE_VERSION"
+
+      # Windows unsigned packaging still reads apps/desktop/.env.windows.
+      # Placeholder origins only satisfy local validation; they are never contacted.
+      - name: Create Windows packaging env
+        if: matrix.target == 'win-x64'
+        run: |
+          cat > apps/desktop/.env.windows <<'EOF'
+          DSH_DESKTOP_APP_ID=com.deepseek.dsh
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://example.com"]}
+          DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3
+          EOF
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Make the tag version authoritative so artifact names contain the tag version.
+      # Runs after install so the frozen lockfile is never re-resolved.
+      - name: Apply tag version to manifests
+        if: github.event_name == 'push'
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const semver = require("semver");
+            const v = process.env.RELEASE_VERSION;
+            if (!semver.valid(v)) {
+              console.error("Tag does not resolve to a valid semver version: " + v);
+              process.exit(1);
+            }
+            for (const p of ["package.json", "apps/desktop/package.json"]) {
+              const json = JSON.parse(fs.readFileSync(p, "utf8"));
+              json.version = v;
+              fs.writeFileSync(p, JSON.stringify(json, null, 2) + "\n");
+            }
+            console.log("Applied version " + v);
+          '
+
+      - name: Package installer
+        run: pnpm run ${{ matrix.package_script }}
+
+      - name: Locate installer
+        id: installer
+        run: |
+          DIR="apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts"
+          test -d "$DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          ls -la "$DIR"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: installer-${{ matrix.target }}-${{ env.RELEASE_VERSION }}
+          path: ${{ steps.installer.outputs.dir }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/') || inputs.publish_release == true
+    steps:
+      - name: Download all installers
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s globstar nullglob
+          EXTRA=()
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            TAG="$GITHUB_REF_NAME"
+            case "$TAG" in
+              dsh-v*) VERSION="${TAG#dsh-v}" ;;
+              v*)     VERSION="${TAG#v}" ;;
+              *)      VERSION="$TAG" ;;
+            esac
+            TITLE="DeepSeek Harness $TAG"
+            NOTES="Unsigned desktop installers built from tag $TAG."
+            # Pre-release versions (e.g. 0.2.2-alpha.2) are marked as prerelease.
+            if [[ "$VERSION" == *-* ]]; then EXTRA+=(--prerelease); fi
+          else
+            SHORT_SHA="${GITHUB_SHA:0:7}"
+            STAMP="$(date -u +%Y%m%d)"
+            TAG="ci-${SHORT_SHA}-${STAMP}"
+            TITLE="DeepSeek Harness nightly $TAG"
+            NOTES="Unsigned desktop installers built from ${{ inputs.source_ref }} (${SHORT_SHA})."
+            EXTRA+=(--prerelease --target "$GITHUB_SHA")
+          fi
+          FILES=(artifacts/**/*.exe artifacts/**/*.dmg)
+          if [[ ${#FILES[@]} -eq 0 ]]; then
+            echo "No installer files found under artifacts/" >&2
+            exit 1
+          fi
+          gh release create "$TAG" "${FILES[@]}" \
+            --title "$TITLE" --notes "$NOTES" "${EXTRA[@]}"
+          echo "Published release $TAG"
