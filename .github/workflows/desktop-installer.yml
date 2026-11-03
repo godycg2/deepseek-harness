@@ -188,6 +188,14 @@ jobs:
       contents: write
     if: startsWith(github.ref, 'refs/tags/') || inputs.publish_release == true
     steps:
+      # 提供本地 git 仓库：手动 source 模式要创建新标签，gh 会在本地调用 git
+      # 解析 --target 的 commit；不检出会报 “not a git repository”。
+      - name: 检出源码
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref }}
+          fetch-depth: 0
+
       - name: 下载全部安装包
         uses: actions/download-artifact@v8
         with:
